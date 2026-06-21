@@ -1,5 +1,6 @@
 import type { Route } from "./+types/home";
 import { useEffect, useState } from "react";
+import { resolveRate } from "../utils/rates";
 
 type IconName =
   | "accounts"
@@ -235,6 +236,21 @@ function formatDurationHours(totalSeconds: number) {
   return `${(totalSeconds / 3600).toFixed(4)}h`;
 }
 
+function formatMoney(cents: number) {
+  return (cents / 100).toLocaleString("en-NG", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+function getTodayLabel() {
+  return new Date().toLocaleDateString("en-US", {
+    month: "2-digit",
+    day: "2-digit",
+    year: "numeric",
+  });
+}
+
 export default function Home() {
   const [activeTab, setActiveTab] = useState<DashboardTab>("personal");
   const [isTimerRunning, setIsTimerRunning] = useState(false);
@@ -308,7 +324,20 @@ export default function Home() {
             setIsTimeEntryOpen(false);
             setEditingEntry(null);
           }}
-          onAddHistoryEntry={(entry) => setHistoryEntries((entries) => [entry, ...entries])}
+          onDeleteHistoryEntry={(entryId) =>
+            setHistoryEntries((entries) => entries.filter((entry) => entry.id !== entryId))
+          }
+          onUpsertHistoryEntry={(entry) =>
+            setHistoryEntries((entries) => {
+              const entryExists = entries.some((item) => item.id === entry.id);
+
+              if (!entryExists) {
+                return [entry, ...entries];
+              }
+
+              return entries.map((item) => (item.id === entry.id ? entry : item));
+            })
+          }
         />
       )}
       {isHistoryOpen && (
@@ -638,12 +667,14 @@ function TimeEntryModal({
   elapsedSeconds,
   editingEntry,
   onClose,
-  onAddHistoryEntry,
+  onDeleteHistoryEntry,
+  onUpsertHistoryEntry,
 }: {
   elapsedSeconds: number;
   editingEntry?: TimeEntry | null;
   onClose: () => void;
-  onAddHistoryEntry: (entry: TimeEntry) => void;
+  onDeleteHistoryEntry: (entryId: number) => void;
+  onUpsertHistoryEntry: (entry: TimeEntry) => void;
 }) {
   const [duration, setDuration] = useState(editingEntry ? editingEntry.duration : formatDurationHours(elapsedSeconds));
   const [matterQuery, setMatterQuery] = useState(editingEntry ? editingEntry.matter : "");
@@ -669,6 +700,19 @@ function TimeEntryModal({
   const nonBillableDisabled = writtenOff;
   const writtenOffDisabled = nonBillable;
   const matterSelected = matterQuery.trim().length > 0;
+  const rate = resolveRate({
+    attorneyId: 1,
+    practiceAreaId: activityQuery.trim() ? 1 : null,
+    matterId: matterSelected ? 1 : null,
+  });
+  const rateSourceLabel =
+    rate.source === "practiceArea"
+      ? "Practice area rate"
+      : rate.source === "attorney"
+        ? "Attorney rate"
+        : rate.source === "matter"
+          ? "Matter rate"
+          : "Default rate";
 
   useEffect(() => {
     if (!toastMessage) {
@@ -682,21 +726,21 @@ function TimeEntryModal({
     return () => window.clearTimeout(timeoutId);
   }, [toastMessage]);
 
-  function createHistoryEntry() {
+  function createHistoryEntry(action: "save" | "createAnother" | "duplicate") {
     const entry: TimeEntry = {
-      id: Date.now(),
+      id: action === "duplicate" ? Date.now() : editingEntry?.id ?? Date.now(),
       matter: matterQuery.trim() || "No matter",
       activity: activityQuery.trim() || "No activity",
       description: description.trim(),
       duration,
-      date: "06/19/2026",
+      date: action === "duplicate" ? getTodayLabel() : editingEntry?.date ?? getTodayLabel(),
       entryTime: formatElapsedTime(replaySeconds),
       nonBillable,
       writtenOff,
       showOnBill,
     };
 
-    onAddHistoryEntry(entry);
+    onUpsertHistoryEntry(entry);
     return entry;
   }
 
@@ -731,10 +775,10 @@ function TimeEntryModal({
     action: "save" | "createAnother" | "duplicate",
     closeOnSave = true,
   ) {
-    createHistoryEntry();
+    createHistoryEntry(action);
 
     if (action === "save") {
-      setToastMessage("Time entry saved");
+      setToastMessage(editingEntry ? "Time entry updated" : "Time entry saved");
       if (closeOnSave) {
         onClose();
       }
@@ -751,14 +795,14 @@ function TimeEntryModal({
   }
 
   function handleAction(action: TimeEntryAction) {
-    if (!matterSelected) {
-      setPendingAction(action);
-      setShowMatterWarning(true);
+    if (action === "cancel" || action === "delete") {
+      openConfirmation(action);
       return;
     }
 
-    if (action === "cancel" || action === "delete") {
-      openConfirmation(action);
+    if (!matterSelected) {
+      setPendingAction(action);
+      setShowMatterWarning(true);
       return;
     }
 
@@ -797,7 +841,8 @@ function TimeEntryModal({
       return;
     }
 
-    if (confirmation.type === "delete") {
+    if (confirmation.type === "delete" && editingEntry) {
+      onDeleteHistoryEntry(editingEntry.id);
       setToastMessage("Time entry deleted");
     }
 
@@ -814,7 +859,7 @@ function TimeEntryModal({
         role="dialog"
       >
         <header className="modal-header">
-          <h2 id="time-entry-title">Edit time entry</h2>
+          <h2 id="time-entry-title">{editingEntry ? "Edit time entry" : "New time entry"}</h2>
           <button aria-label="Close time entry modal" onClick={onClose} type="button">
             <Icon name="close" />
           </button>
@@ -877,7 +922,7 @@ function TimeEntryModal({
                   Date <span className="required">*</span>
                 </label>
                 <div className="input-with-icon">
-                  <input id="entry-date" value="06/19/2026" readOnly />
+                  <input id="entry-date" value={editingEntry?.date ?? getTodayLabel()} readOnly />
                   <button aria-label="Open calendar" type="button">
                     <Icon name="calendarDay" />
                   </button>
@@ -902,9 +947,9 @@ function TimeEntryModal({
                 </label>
                 <div className="rate-control">
                   <span>₦</span>
-                  <input id="rate" value="0.00" readOnly />
+                  <input id="rate" value={formatMoney(rate.rateCents)} readOnly />
                   <span>NGN / hr</span>
-                  <em>Default rate</em>
+                  <em>{rateSourceLabel}</em>
                 </div>
               </div>
 
@@ -1132,11 +1177,24 @@ function EntryHistoryModal({
           </button>
         </header>
         <div className="history-body">
-          {entries.length === 0 ? (
-            <>
-              <p>No matter</p>
+          {currentTimer > 0 && (
+            <div className="active-timer-card" role="status">
+              <div>
+                <span>Running timer</span>
+                <strong>No matter</strong>
+                <p>No description</p>
+              </div>
+              <button className="history-play-button active" type="button">
+                <Icon name="pause" />
+                <span>{currentTime}</span>
+              </button>
+            </div>
+          )}
+          {entries.length === 0 && currentTimer === 0 ? (
+            <div className="history-empty">
+              <strong>No matter</strong>
               <p>No description</p>
-            </>
+            </div>
           ) : (
             <>
               <ul>
