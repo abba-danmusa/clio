@@ -222,6 +222,21 @@ const firmReports: FirmReport[] = [
 
 const firmChartYAxis = ["1", "0.9", "0.8", "0.7", "0.6", "0.5", "0.4", "0.3", "0.2", "0.1", "0"];
 
+const matterOptions = [
+  {
+    label: "Abdullahi Danmusa Legal - General",
+    detail: "Abdullahi Danmusa",
+  },
+  {
+    label: "Estate Planning Consultation",
+    detail: "Abdullahi Danmusa Legal",
+  },
+  {
+    label: "Corporate Compliance Review",
+    detail: "Practice365",
+  },
+];
+
 function formatElapsedTime(totalSeconds: number) {
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
@@ -234,6 +249,11 @@ function formatElapsedTime(totalSeconds: number) {
 
 function formatDurationHours(totalSeconds: number) {
   return `${(totalSeconds / 3600).toFixed(4)}h`;
+}
+
+function parseElapsedTime(time: string) {
+  const [hours = "0", minutes = "0", seconds = "0"] = time.split(":");
+  return Number(hours) * 3600 + Number(minutes) * 60 + Number(seconds);
 }
 
 function formatMoney(cents: number) {
@@ -251,6 +271,24 @@ function getTodayLabel() {
   });
 }
 
+function parseDateLabel(value: string) {
+  const [month, day, year] = value.split("/").map(Number);
+
+  if (!month || !day || !year) {
+    return new Date();
+  }
+
+  return new Date(year, month - 1, day);
+}
+
+function formatDateLabel(date: Date) {
+  return date.toLocaleDateString("en-US", {
+    month: "2-digit",
+    day: "2-digit",
+    year: "numeric",
+  });
+}
+
 export default function Home() {
   const [activeTab, setActiveTab] = useState<DashboardTab>("personal");
   const [isTimerRunning, setIsTimerRunning] = useState(false);
@@ -260,6 +298,7 @@ export default function Home() {
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [historyEntries, setHistoryEntries] = useState<TimeEntry[]>([]);
   const [editingEntry, setEditingEntry] = useState<TimeEntry | null>(null);
+  const [activeHistoryEntryId, setActiveHistoryEntryId] = useState<number | null>(null);
 
   useEffect(() => {
     if (!isTimerRunning) {
@@ -283,16 +322,68 @@ export default function Home() {
   function toggleTimer() {
     if (isTimerRunning) {
       const capturedSeconds = elapsedSeconds;
+      const resumedEntry =
+        activeHistoryEntryId === null
+          ? null
+          : historyEntries.find((entry) => entry.id === activeHistoryEntryId) ?? null;
 
       setIsTimerRunning(false);
       setTimeEntrySeconds(capturedSeconds);
       setElapsedSeconds(0);
+      setEditingEntry(
+        resumedEntry
+          ? {
+              ...resumedEntry,
+              duration: formatDurationHours(capturedSeconds),
+              entryTime: formatElapsedTime(capturedSeconds),
+            }
+          : null,
+      );
+      setActiveHistoryEntryId(null);
       setIsTimeEntryOpen(true);
       return;
     }
 
+    setActiveHistoryEntryId(null);
     setElapsedSeconds(0);
     setIsTimerRunning(true);
+  }
+
+  function toggleHistoryEntryTimer(entry: TimeEntry) {
+    if (isTimerRunning && activeHistoryEntryId === entry.id) {
+      const capturedSeconds = elapsedSeconds;
+
+      setIsTimerRunning(false);
+      setIsHistoryOpen(false);
+      setTimeEntrySeconds(capturedSeconds);
+      setElapsedSeconds(0);
+      setEditingEntry({
+        ...entry,
+        duration: formatDurationHours(capturedSeconds),
+        entryTime: formatElapsedTime(capturedSeconds),
+      });
+      setActiveHistoryEntryId(null);
+      setIsTimeEntryOpen(true);
+      return;
+    }
+
+    setEditingEntry(null);
+    setTimeEntrySeconds(0);
+    setActiveHistoryEntryId(entry.id);
+    setElapsedSeconds(parseElapsedTime(entry.entryTime));
+    setIsTimerRunning(true);
+  }
+
+  function pauseCurrentHistoryTimer() {
+    const capturedSeconds = elapsedSeconds;
+
+    setIsTimerRunning(false);
+    setIsHistoryOpen(false);
+    setTimeEntrySeconds(capturedSeconds);
+    setElapsedSeconds(0);
+    setEditingEntry(null);
+    setActiveHistoryEntryId(null);
+    setIsTimeEntryOpen(true);
   }
 
   return (
@@ -344,18 +435,23 @@ export default function Home() {
         <EntryHistoryModal
           entries={historyEntries}
           currentTimer={elapsedSeconds}
+          isTimerRunning={isTimerRunning}
+          activeEntryId={activeHistoryEntryId}
           onClose={() => setIsHistoryOpen(false)}
           onNewTimeEntry={() => {
             setIsHistoryOpen(false);
             setIsTimeEntryOpen(true);
             setTimeEntrySeconds(0);
             setEditingEntry(null);
+            setActiveHistoryEntryId(null);
           }}
           onEditEntry={(entry) => {
             setEditingEntry(entry);
             setIsTimeEntryOpen(true);
             setIsHistoryOpen(false);
           }}
+          onToggleCurrentTimer={pauseCurrentHistoryTimer}
+          onToggleEntryTimer={toggleHistoryEntryTimer}
         />
       )}
     </div>
@@ -680,8 +776,10 @@ function TimeEntryModal({
   const [matterQuery, setMatterQuery] = useState(editingEntry ? editingEntry.matter : "");
   const [activityQuery, setActivityQuery] = useState(editingEntry ? editingEntry.activity : "");
   const [description, setDescription] = useState(editingEntry ? editingEntry.description : "");
+  const [entryDate, setEntryDate] = useState(editingEntry?.date ?? getTodayLabel());
   const [matterOpen, setMatterOpen] = useState(false);
   const [activityOpen, setActivityOpen] = useState(false);
+  const [datePickerOpen, setDatePickerOpen] = useState(false);
   const [nonBillable, setNonBillable] = useState(editingEntry ? editingEntry.nonBillable : false);
   const [showOnBill, setShowOnBill] = useState(editingEntry ? editingEntry.showOnBill : false);
   const [writtenOff, setWrittenOff] = useState(editingEntry ? editingEntry.writtenOff : false);
@@ -733,7 +831,7 @@ function TimeEntryModal({
       activity: activityQuery.trim() || "No activity",
       description: description.trim(),
       duration,
-      date: action === "duplicate" ? getTodayLabel() : editingEntry?.date ?? getTodayLabel(),
+      date: action === "duplicate" ? getTodayLabel() : entryDate,
       entryTime: formatElapsedTime(replaySeconds),
       nonBillable,
       writtenOff,
@@ -749,8 +847,10 @@ function TimeEntryModal({
     setMatterQuery("");
     setActivityQuery("");
     setDescription("");
+    setEntryDate(getTodayLabel());
     setMatterOpen(false);
     setActivityOpen(false);
+    setDatePickerOpen(false);
     setNonBillable(false);
     setShowOnBill(false);
     setWrittenOff(false);
@@ -886,12 +986,18 @@ function TimeEntryModal({
                 </div>
               </div>
 
-              <SearchableEmptySelect
+              <SearchableSelect
                 id="activity-category"
                 isOpen={activityOpen}
                 label="Activity category"
-                onOpenChange={setActivityOpen}
+                onOpenChange={(open) => {
+                  setActivityOpen(open);
+                  if (open) {
+                    setMatterOpen(false);
+                  }
+                }}
                 onQueryChange={setActivityQuery}
+                options={[]}
                 placeholder="Find a category"
                 query={activityQuery}
               />
@@ -907,12 +1013,18 @@ function TimeEntryModal({
             </div>
 
             <div className="modal-column">
-              <SearchableEmptySelect
+              <SearchableSelect
                 id="matter"
                 isOpen={matterOpen}
                 label="Matter"
-                onOpenChange={setMatterOpen}
+                onOpenChange={(open) => {
+                  setMatterOpen(open);
+                  if (open) {
+                    setActivityOpen(false);
+                  }
+                }}
                 onQueryChange={setMatterQuery}
+                options={matterOptions}
                 placeholder="Find a matter by matter name or client"
                 query={matterQuery}
               />
@@ -921,12 +1033,19 @@ function TimeEntryModal({
                 <label htmlFor="entry-date">
                   Date <span className="required">*</span>
                 </label>
-                <div className="input-with-icon">
-                  <input id="entry-date" value={editingEntry?.date ?? getTodayLabel()} readOnly />
-                  <button aria-label="Open calendar" type="button">
-                    <Icon name="calendarDay" />
-                  </button>
-                </div>
+                <DatePickerField
+                  id="entry-date"
+                  isOpen={datePickerOpen}
+                  onOpenChange={(open) => {
+                    setDatePickerOpen(open);
+                    if (open) {
+                      setMatterOpen(false);
+                      setActivityOpen(false);
+                    }
+                  }}
+                  onChange={setEntryDate}
+                  value={entryDate}
+                />
               </div>
 
               <div className="form-field">
@@ -1038,13 +1157,135 @@ function TimeEntryModal({
   );
 }
 
-function SearchableEmptySelect({
+function DatePickerField({
+  id,
+  isOpen,
+  onChange,
+  onOpenChange,
+  value,
+}: {
+  id: string;
+  isOpen: boolean;
+  onChange: (value: string) => void;
+  onOpenChange: (open: boolean) => void;
+  value: string;
+}) {
+  const selectedDate = parseDateLabel(value);
+  const [visibleMonth, setVisibleMonth] = useState(
+    new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1),
+  );
+  const monthTitle = visibleMonth.toLocaleDateString("en-US", {
+    month: "long",
+    year: "numeric",
+  });
+  const days = buildCalendarDays(visibleMonth);
+
+  useEffect(() => {
+    setVisibleMonth(new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1));
+  }, [value]);
+
+  function changeMonth(delta: number) {
+    setVisibleMonth((month) => new Date(month.getFullYear(), month.getMonth() + delta, 1));
+  }
+
+  function selectDate(date: Date) {
+    onChange(formatDateLabel(date));
+    onOpenChange(false);
+  }
+
+  function selectToday() {
+    selectDate(new Date());
+  }
+
+  return (
+    <div className="date-picker-field">
+      <div className="input-with-icon">
+        <input
+          aria-expanded={isOpen}
+          aria-haspopup="dialog"
+          id={id}
+          onFocus={() => onOpenChange(true)}
+          readOnly
+          value={value}
+        />
+        <button
+          aria-label="Open calendar"
+          onClick={() => onOpenChange(!isOpen)}
+          type="button"
+        >
+          <Icon name="calendarDay" />
+        </button>
+      </div>
+      {isOpen && (
+        <div className="date-picker-menu" role="dialog" aria-label="Choose date">
+          <div className="date-picker-toolbar">
+            <button aria-label="Previous month" onClick={() => changeMonth(-1)} type="button">
+              <Icon name="chevronLeft" />
+            </button>
+            <strong>{monthTitle}</strong>
+            <button aria-label="Next month" onClick={() => changeMonth(1)} type="button">
+              <Icon name="chevronRight" />
+            </button>
+          </div>
+          <div className="date-picker-grid" role="grid">
+            {["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"].map((day) => (
+              <span className="date-picker-weekday" key={day}>
+                {day}
+              </span>
+            ))}
+            {days.map(({ date, inMonth }) => {
+              const label = formatDateLabel(date);
+              const isSelected = label === value;
+
+              return (
+                <button
+                  aria-label={label}
+                  aria-selected={isSelected}
+                  className={inMonth ? "date-picker-day" : "date-picker-day muted"}
+                  key={label}
+                  onClick={() => selectDate(date)}
+                  role="gridcell"
+                  type="button"
+                >
+                  {date.getDate()}
+                </button>
+              );
+            })}
+          </div>
+          <button className="date-picker-today" onClick={selectToday} type="button">
+            Today
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function buildCalendarDays(month: Date) {
+  const firstOfMonth = new Date(month.getFullYear(), month.getMonth(), 1);
+  const startOffset = (firstOfMonth.getDay() + 6) % 7;
+  const firstVisibleDate = new Date(firstOfMonth);
+  firstVisibleDate.setDate(firstOfMonth.getDate() - startOffset);
+
+  return Array.from({ length: 42 }, (_, index) => {
+    const date = new Date(firstVisibleDate);
+    date.setDate(firstVisibleDate.getDate() + index);
+
+    return {
+      date,
+      inMonth: date.getMonth() === month.getMonth(),
+    };
+  });
+}
+
+function SearchableSelect({
   error,
   id,
   isOpen,
   label,
   onOpenChange,
   onQueryChange,
+  options,
   placeholder,
   query,
 }: {
@@ -1054,40 +1295,72 @@ function SearchableEmptySelect({
   label: string;
   onOpenChange: (open: boolean) => void;
   onQueryChange: (query: string) => void;
+  options: Array<{ label: string; detail?: string }>;
   placeholder: string;
   query: string;
 }) {
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredOptions = options.filter((option) => {
+    const haystack = `${option.label} ${option.detail ?? ""}`.toLowerCase();
+    return haystack.includes(normalizedQuery);
+  });
+
+  function selectOption(option: { label: string }) {
+    onQueryChange(option.label);
+    onOpenChange(false);
+  }
+
   return (
     <div className="form-field empty-select-field">
       <label htmlFor={id}>{label}</label>
-      <div className="select-like">
-        <input
-          aria-expanded={isOpen}
-          aria-haspopup="listbox"
-          id={id}
-          onChange={(event) => {
-            onQueryChange(event.target.value);
-            onOpenChange(true);
-          }}
-          onFocus={() => onOpenChange(true)}
-          placeholder={placeholder}
-          value={query}
-        />
-        <button
-          aria-label={`Open ${label.toLowerCase()} list`}
-          onClick={() => onOpenChange(!isOpen)}
-          type="button"
-        >
-          <Icon name="chevronDown" />
-        </button>
-      </div>
-      {isOpen && (
-        <div className="empty-select-menu" role="listbox">
-          <div role="option" aria-selected="false">
-            No results found
-          </div>
+      <div className="searchable-select">
+        <div className="select-like">
+          <input
+            aria-controls={`${id}-listbox`}
+            aria-expanded={isOpen}
+            aria-haspopup="listbox"
+            autoComplete="off"
+            id={id}
+            onChange={(event) => {
+              onQueryChange(event.target.value);
+              onOpenChange(true);
+            }}
+            onFocus={() => onOpenChange(true)}
+            placeholder={placeholder}
+            value={query}
+          />
+          <button
+            aria-label={`Open ${label.toLowerCase()} list`}
+            onClick={() => onOpenChange(!isOpen)}
+            type="button"
+          >
+            <Icon name="chevronDown" />
+          </button>
         </div>
-      )}
+        {isOpen && (
+          <div className="empty-select-menu" id={`${id}-listbox`} role="listbox">
+            {filteredOptions.length > 0 ? (
+              filteredOptions.map((option) => (
+                <button
+                  aria-selected={query === option.label}
+                  key={option.label}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => selectOption(option)}
+                  role="option"
+                  type="button"
+                >
+                  <span>{option.label}</span>
+                  {option.detail && <small>{option.detail}</small>}
+                </button>
+              ))
+            ) : (
+              <div className="empty-select-result" role="option" aria-selected="false">
+                No results found.
+              </div>
+            )}
+          </div>
+        )}
+      </div>
       {error && <p className="field-error">{error}</p>}
     </div>
   );
@@ -1110,7 +1383,10 @@ function ConfirmDialog({
     <div className="modal-backdrop" role="presentation">
       <section className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title">
         <header className="confirm-header">
-          <h3 id="confirm-dialog-title">{title}</h3>
+          <div className="confirm-title">
+            <span className="confirm-alert" aria-hidden="true">!</span>
+            <h3 id="confirm-dialog-title">{title}</h3>
+          </div>
           <button aria-label="Close confirmation dialog" onClick={onCancel} type="button">
             <Icon name="close" />
           </button>
@@ -1132,17 +1408,25 @@ function ConfirmDialog({
 }
 
 function EntryHistoryModal({
+  activeEntryId,
   entries,
   currentTimer,
+  isTimerRunning,
   onClose,
   onNewTimeEntry,
   onEditEntry,
+  onToggleCurrentTimer,
+  onToggleEntryTimer,
 }: {
+  activeEntryId: number | null;
   entries: TimeEntry[];
   currentTimer: number;
+  isTimerRunning: boolean;
   onClose: () => void;
   onNewTimeEntry: () => void;
   onEditEntry: (entry: TimeEntry) => void;
+  onToggleCurrentTimer: () => void;
+  onToggleEntryTimer: (entry: TimeEntry) => void;
 }) {
   const now = new Date();
   const subtitle = now.toLocaleDateString("en-US", {
@@ -1152,12 +1436,29 @@ function EntryHistoryModal({
     year: "numeric",
   });
   const displaySubtitle = `${subtitle.replace(", ", " (today), ")}`;
-  const currentTime = formatElapsedTime(currentTimer);
+  const totalSeconds =
+    currentTimer +
+    entries.reduce((total, entry) => {
+      if (activeEntryId === entry.id && isTimerRunning) {
+        return total;
+      }
+
+      return total + parseElapsedTime(entry.entryTime);
+    }, 0);
+  const currentTime = formatElapsedTime(totalSeconds);
+  const showCurrentTimer = currentTimer > 0 && activeEntryId === null;
+  const hasEntries = entries.length > 0 || showCurrentTimer;
   return (
     <div className="modal-backdrop" role="presentation">
       <section className="history-modal" role="dialog" aria-modal="true" aria-labelledby="history-title">
         <header className="history-header">
-          <div className="history-header-left">
+          <div className="history-title-row">
+            <h3 id="history-title">Timekeeper</h3>
+            <button aria-label="Close history" onClick={onClose} type="button">
+              <Icon name="close" />
+            </button>
+          </div>
+          <div className="history-date-row">
             <div className="history-nav-buttons">
               <button type="button" aria-label="Previous day">
                 <Icon name="chevronLeft" />
@@ -1166,57 +1467,73 @@ function EntryHistoryModal({
                 <Icon name="chevronRight" />
               </button>
             </div>
-            <div>
-              <h3 id="history-title">Timekeeper</h3>
-              <p className="history-subtitle">{displaySubtitle}</p>
-            </div>
+            <p className="history-subtitle">{displaySubtitle}</p>
+            <div className="history-header-right">{currentTime}</div>
           </div>
-          <div className="history-header-right">{currentTime}</div>
-          <button aria-label="Close history" onClick={onClose} type="button">
-            <Icon name="close" />
-          </button>
         </header>
-        <div className="history-body">
-          {currentTimer > 0 && (
-            <div className="active-timer-card" role="status">
+        <div className={hasEntries ? "history-body has-entries" : "history-body is-empty"}>
+          {showCurrentTimer && (
+            <div className="history-item active-timer-card" role="status">
               <div>
-                <span>Running timer</span>
                 <strong>No matter</strong>
                 <p>No description</p>
               </div>
-              <button className="history-play-button active" type="button">
-                <Icon name="pause" />
-                <span>{currentTime}</span>
-              </button>
+              <div className="history-item-actions">
+                <button
+                  aria-label="Pause running timer and edit entry"
+                  className="history-play-button active"
+                  onClick={onToggleCurrentTimer}
+                  type="button"
+                >
+                  <Icon name="pause" />
+                  <span>{formatElapsedTime(currentTimer)}</span>
+                </button>
+                <button className="secondary-action compact" type="button" onClick={onNewTimeEntry}>
+                  Edit entry
+                </button>
+              </div>
             </div>
           )}
-          {entries.length === 0 && currentTimer === 0 ? (
+          {!hasEntries ? (
             <div className="history-empty">
-              <strong>No matter</strong>
-              <p>No description</p>
+              No time entries for this date.
             </div>
           ) : (
-            <>
-              <ul>
-                {entries.map((entry) => (
-                  <li key={entry.id} className="history-item">
-                    <div>
-                      <strong>{entry.matter}</strong>
-                      <p>{entry.description || "No description"}</p>
-                    </div>
-                    <div className="history-item-actions">
-                      <button className="history-play-button" type="button">
-                        <Icon name="play" />
-                        <span>{entry.entryTime}</span>
-                      </button>
-                      <button className="secondary-action compact" type="button" onClick={() => onEditEntry(entry)}>
-                        Edit entry
-                      </button>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            </>
+            <ul>
+              {entries.map((entry) => (
+                <li
+                  key={entry.id}
+                  className={activeEntryId === entry.id && isTimerRunning ? "history-item active-timer-card" : "history-item"}
+                >
+                  <div>
+                    <strong>{entry.matter}</strong>
+                    <p>{entry.description || "No description"}</p>
+                  </div>
+                  <div className="history-item-actions">
+                    <button
+                      aria-label={
+                        activeEntryId === entry.id && isTimerRunning
+                          ? "Pause timer and edit entry"
+                          : "Resume timer for entry"
+                      }
+                      className={activeEntryId === entry.id && isTimerRunning ? "history-play-button active" : "history-play-button"}
+                      onClick={() => onToggleEntryTimer(entry)}
+                      type="button"
+                    >
+                      <Icon name={activeEntryId === entry.id && isTimerRunning ? "pause" : "play"} />
+                      <span>
+                        {activeEntryId === entry.id && isTimerRunning
+                          ? formatElapsedTime(currentTimer)
+                          : entry.entryTime}
+                      </span>
+                    </button>
+                    <button className="secondary-action compact" type="button" onClick={() => onEditEntry(entry)}>
+                      Edit entry
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
           )}
         </div>
         <footer className="history-footer">
